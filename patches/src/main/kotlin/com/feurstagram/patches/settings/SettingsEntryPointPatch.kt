@@ -12,6 +12,7 @@ import com.feurstagram.patches.shared.Constants.COMPATIBILITY_INSTAGRAM
 import com.feurstagram.patches.shared.Constants.EXTENSION
 
 private const val SETTINGS_CLASS = "Lcom/feurstagram/extension/Settings;"
+private const val FILES_ATTACHMENT_CLASS = "Lcom/feurstagram/extension/FilesAttachment;"
 
 private fun fieldType(instruction: Any?): String? =
     ((instruction as? ReferenceInstruction)?.reference as? FieldReference)?.type
@@ -65,7 +66,9 @@ val settingsEntryPointPatch = bytecodePatch(
             addInstructions(
                 tabBarStore.location.index + 1,
                 "invoke-static { v$tabBarRegister }, " +
-                    "$SETTINGS_CLASS->installHomeTabWatcher(Landroid/view/ViewGroup;)V",
+                    "$SETTINGS_CLASS->installHomeTabWatcher(Landroid/view/ViewGroup;)V\n" +
+                    "invoke-static { v$tabBarRegister }, " +
+                    "$FILES_ATTACHMENT_CLASS->install(Landroid/view/ViewGroup;)V",
             )
         }
     }

@@ -1,0 +1,1 @@
+{"routes":[{"path":"/","title":"Movie Watcher home"},{"path":"/room/:roomCode","title":"Movie Watcher room"},{"path":"/404","title":"Not found"}]}

@@ -1,0 +1,13 @@
+# Movie Watcher delivery checklist
+
+- [ ] Homepage + UI system: Homepage includes a navbar, hero with “Movie Watcher” and “Watch Together. Stay Synchronized.”, Create Room and Join Room actions, How it works, feature cards for Watch Together / Perfect Sync / Private Rooms / Live Chat, supported source explanation, FAQ, and footer in a premium dark cinematic responsive style.
+- [ ] Create and join rooms: A user can create a private room with a unique room code/link, guest username, default maximum capacity of 3, optional password, inactivity expiry, and host role; another user can join with a room code/link and username without creating an account; locked/full/expired rooms return clear errors.
+- [ ] Persistent room data: The managed database stores users, rooms, room members, and messages with timestamps, movie/source fields, membership tokens, indexes, and server-side authorization checks.
+- [ ] Authorized movie sources: Add Movie accepts official YouTube/Vimeo embeds and direct video URLs where allowed, detects title/source/player URL when possible, and rejects unsupported or unsafe URLs with “This source cannot be played inside Movie Watcher. Please use a supported or officially embeddable source.” without proxying private media.
+- [ ] Synchronized playback: The room uses server-authoritative play/pause, seek, current position, buffering state, source changes, and host-control settings; clients receive near-real-time events, compare server time plus position, and correct only small drift.
+- [ ] Host controls and moderation: Host can start, pause, seek, change movie, remove a member, lock/unlock the room, toggle Host Controls Only, and end the room; non-host users cannot perform host-only actions.
+- [ ] Presence and chat: Room shows member avatar/initials, username, online/offline state, host badge, member count, and a live chat with username, message, timestamp, and emoji support; messages are validated and persisted.
+- [ ] Security and failure handling: Validate input and URLs, rate-limit chat/mutations, authorize room membership, escape/render chat safely, avoid exposing secrets, deny arbitrary server-side URL fetching, and use safe iframe attributes.
+- [ ] Responsive watch room: Desktop uses a large player plus right social rail; mobile stacks player, movie info, members, then chat with touch-friendly controls.
+- [ ] Future app architecture: Shared room/source/event types, service adapter boundaries, and API-shaped server procedures remain reusable for a React Native + Expo client later.
+- [ ] Delivery: Route manifest, logo metadata, typecheck, tests, production build, Preview health, and checkpoint/push are complete.

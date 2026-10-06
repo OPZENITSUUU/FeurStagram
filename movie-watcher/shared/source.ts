@@ -50,7 +50,7 @@ export function detectMovieSource(rawUrl: string): MovieMetadata {
         source: "youtube",
         sourceLabel: "YouTube embed",
         originalUrl: trimmed,
-        playerUrl: `https://www.youtube-nocookie.com/embed/${id}?rel=0&modestbranding=1&playsinline=1`,
+        playerUrl: `https://www.youtube-nocookie.com/embed/${id}?rel=0&modestbranding=1&playsinline=1&enablejsapi=1`,
         title: readableTitle(url),
         posterUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
         durationSeconds: null,

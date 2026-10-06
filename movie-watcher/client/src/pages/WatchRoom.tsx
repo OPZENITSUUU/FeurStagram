@@ -17,6 +17,7 @@ export default function WatchRoom({ params }: Props) {
   const code = params.roomCode.toUpperCase();
   const [, navigate] = useLocation();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const applyingRemote = useRef(false);
   const [token, setToken] = useState(() => getStoredToken(code));
@@ -34,6 +35,24 @@ export default function WatchRoom({ params }: Props) {
 
   const me = useMemo(() => snapshot?.members.find(member => member.id === localStorage.getItem(`movie-watcher:member-id:${code}`)) ?? snapshot?.members.find(member => member.isHost && token === localStorage.getItem(`movie-watcher:host:${code}`)), [snapshot, code, token]);
   const canControl = Boolean(me?.isHost || !snapshot?.hostControlsOnly);
+
+  function syncEmbed(action: "play" | "pause" | "seek", position = snapshot?.currentPosition ?? 0) {
+    const currentMovie = snapshot?.movie;
+    const target = iframeRef.current?.contentWindow;
+    if (!currentMovie || currentMovie.source === "direct" || !target) return;
+    if (currentMovie.source === "youtube") {
+      const func = action === "play" ? "playVideo" : action === "pause" ? "pauseVideo" : "seekTo";
+      target.postMessage(JSON.stringify({ event: "command", func, args: action === "seek" ? [position, true] : [] }), "*");
+    } else {
+      const method = action === "play" ? "play" : action === "pause" ? "pause" : "setCurrentTime";
+      target.postMessage(JSON.stringify({ method, value: action === "seek" ? position : undefined }), "*");
+    }
+  }
+
+  function togglePlayback() {
+    if (snapshot?.movie?.source === "direct") void playback(videoRef.current?.paused ? "play" : "pause");
+    else void playback(snapshot?.isPlaying ? "pause" : "play");
+  }
 
   useEffect(() => { let active = true; setLoading(true); api<Snapshot>(`/api/rooms/${code}`, { token: token ?? undefined }).then(data => { if (active) setSnapshot(data); }).catch(error => { if (active) setRoomError(error instanceof Error ? error.message : "This room is not available."); }).finally(() => active && setLoading(false)); return () => { active = false; }; }, [code, token]);
 
@@ -63,6 +82,12 @@ export default function WatchRoom({ params }: Props) {
     if (!snapshot.isPlaying && !video.paused) { applyingRemote.current = true; video.pause(); window.setTimeout(() => { applyingRemote.current = false; }, 120); }
   }, [snapshot?.currentPosition, snapshot?.isPlaying, snapshot?.playbackUpdatedAt, snapshot?.movie?.playerUrl]);
 
+  useEffect(() => {
+    if (!snapshot?.movie || snapshot.movie.source === "direct") return;
+    const timer = window.setTimeout(() => syncEmbed(snapshot.isPlaying ? "play" : "pause", snapshot.currentPosition), 150);
+    return () => window.clearTimeout(timer);
+  }, [snapshot?.currentPosition, snapshot?.isPlaying, snapshot?.movie?.source, snapshot?.movie?.playerUrl]);
+
   async function join() {
     setBusy(true); setRoomError("");
     try { const result = await api<{ snapshot: Snapshot; memberToken: string; memberId: string }>(`/api/rooms/${code}/join`, { method: "POST", body: JSON.stringify({ username: joinName, password: joinPassword }) }); storeToken(code, result.memberToken); localStorage.setItem(`movie-watcher:member-id:${code}`, result.memberId); setToken(result.memberToken); setSnapshot(result.snapshot); }
@@ -72,6 +97,7 @@ export default function WatchRoom({ params }: Props) {
   async function playback(action: "play" | "pause" | "seek", position?: number) {
     if (!canControl || !token) return;
     const videoPosition = position ?? videoRef.current?.currentTime ?? snapshot?.currentPosition ?? 0;
+    if (snapshot?.movie?.source !== "direct") syncEmbed(action, videoPosition);
     try { const next = await api<Snapshot>(`/api/rooms/${code}/playback`, { method: "POST", token, body: JSON.stringify({ action, position: videoPosition }) }); setSnapshot(next); }
     catch (error) { setNotice(error instanceof Error ? error.message : "Playback could not be synced."); }
   }
@@ -91,7 +117,7 @@ export default function WatchRoom({ params }: Props) {
   return <main className="room-shell">
     <header className="room-header"><div className="room-header-left"><Link className="room-back" href="/"><ArrowLeft size={17} /></Link><a className="wordmark" href="/"><span className="wordmark-mark"><Film size={15} /></span><span>movie watcher</span></a><span className="header-divider" /><span className="room-label">Room <strong>{code}</strong></span></div><div className="room-header-right"><span className="secure-pill"><span className="live-dot" /> {snapshot.members.length}/{snapshot.maxMembers} in room</span><button className="icon-button" onClick={copyInvite} title="Copy invite link">{copied ? <Check size={17} /> : <Copy size={17} />}</button><button className="icon-button" onClick={() => setShowSettings(true)} title="Room settings"><Settings size={17} /></button></div></header>
     <div className="room-layout">
-      <section className="player-column"><div className={`player-frame ${movie ? "has-movie" : "empty-player"}`}>{movie && isDirect && <video ref={videoRef} src={movie.playerUrl ?? undefined} poster={movie.posterUrl ?? undefined} playsInline controls={false} onPlay={() => !applyingRemote.current && void playback("play")} onPause={() => !applyingRemote.current && void playback("pause")} onSeeked={() => !applyingRemote.current && void playback("seek")} onClick={() => canControl && void playback(videoRef.current?.paused ? "play" : "pause")} />}{movie && !isDirect && movie.playerUrl && <iframe title={movie.title} src={movie.playerUrl} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-same-origin allow-scripts" />}{!movie && <div className="empty-player-content"><div className="empty-reel"><Film size={25} /></div><div className="eyebrow">/ The screen is yours</div><h2>What are we watching?</h2><p>Add an official embed or an authorized video file to start the room.</p><button className="button button-primary" onClick={() => setShowSettings(true)}>Add a movie <ArrowRightIcon /></button></div>}{movie && <div className="player-overlay"><span className="sync-badge"><span className="pulse-dot" /> {snapshot.isPlaying ? "Playing in sync" : "Paused for everyone"}</span>{!canControl && <span className="host-note"><Lock size={13} /> Host controls playback</span>}</div>}</div><div className="player-meta"><div><div className="eyebrow">/ Now screening · {movie?.sourceLabel ?? "Waiting for a source"}</div><h1>{movie?.title ?? "Choose a movie for the room"}</h1><p>{movie ? "The room is ready. Send the invite, then press play when everyone is in." : "Your room exists. Add a supported source from room settings to make it a screening."}</p></div><div className="player-meta-actions">{movie && isDirect && <><button className="round-control" disabled={!canControl} onClick={() => void playback("seek", Math.max(0, (videoRef.current?.currentTime ?? 0) - 10))}><SkipBack size={16} /></button><button className="play-control" disabled={!canControl} onClick={() => void playback(videoRef.current?.paused ? "play" : "pause")} >{snapshot.isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}</button><button className="round-control" disabled={!canControl} onClick={() => void playback("seek", (videoRef.current?.currentTime ?? 0) + 10)}><SkipForward size={16} /></button></>}</div></div></section>
+      <section className="player-column"><div className={`player-frame ${movie ? "has-movie" : "empty-player"}`}>{movie && isDirect && <video ref={videoRef} src={movie.playerUrl ?? undefined} poster={movie.posterUrl ?? undefined} playsInline controls={false} onPlay={() => !applyingRemote.current && void playback("play")} onPause={() => !applyingRemote.current && void playback("pause")} onSeeked={() => !applyingRemote.current && void playback("seek")} onClick={() => canControl && void playback(videoRef.current?.paused ? "play" : "pause")} />}{movie && !isDirect && movie.playerUrl && <iframe ref={iframeRef} title={movie.title} src={movie.playerUrl} onLoad={() => syncEmbed(snapshot.isPlaying ? "play" : "pause", snapshot.currentPosition)} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-same-origin allow-scripts" />}{!movie && <div className="empty-player-content"><div className="empty-reel"><Film size={25} /></div><div className="eyebrow">/ The screen is yours</div><h2>What are we watching?</h2><p>Add an official embed or an authorized video file to start the room.</p><button className="button button-primary" onClick={() => setShowSettings(true)}>Add a movie <ArrowRightIcon /></button></div>}{movie && <div className="player-overlay"><span className="sync-badge"><span className="pulse-dot" /> {snapshot.isPlaying ? "Playing in sync" : "Paused for everyone"}</span>{!canControl && <span className="host-note"><Lock size={13} /> Host controls playback</span>}</div>}</div><div className="player-meta"><div><div className="eyebrow">/ Now screening · {movie?.sourceLabel ?? "Waiting for a source"}</div><h1>{movie?.title ?? "Choose a movie for the room"}</h1><p>{movie ? "The room is ready. Send the invite, then press play when everyone is in." : "Your room exists. Add a supported source from room settings to make it a screening."}</p></div><div className="player-meta-actions">{movie && <><button className="round-control" disabled={!canControl} onClick={() => void playback("seek", Math.max(0, (videoRef.current?.currentTime ?? snapshot.currentPosition) - 10))}><SkipBack size={16} /></button><button className="play-control" disabled={!canControl} onClick={togglePlayback}>{snapshot.isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}</button><button className="round-control" disabled={!canControl} onClick={() => void playback("seek", (videoRef.current?.currentTime ?? snapshot.currentPosition) + 10)}><SkipForward size={16} /></button></>}</div></div></section>
       <aside className="social-rail"><div className="rail-section members-section"><div className="rail-heading"><span><Users size={15} /> People here</span><span className="count-badge">{snapshot.members.length}</span></div><div className="member-list">{snapshot.members.map(member => <div className="member-row" key={member.id}><span className="avatar" style={{ background: member.avatarColor }}>{member.displayName.slice(0, 1).toUpperCase()}</span><span className="member-name"><strong>{member.displayName}{member.isHost && <span className="host-badge">HOST</span>}</strong><small><span className={`status-dot ${member.online ? "online" : "offline"}`} /> {member.online ? "Online now" : "Away"}</small></span>{member.isHost ? <Sparkles size={13} className="host-spark" /> : me?.isHost ? <button className="member-remove" onClick={() => void removeMember(member.id, member.displayName)} aria-label={`Remove ${member.displayName}`}><X size={13} /></button> : <MoreHorizontal size={16} className="member-menu" />}</div>)}</div></div><div className="rail-section chat-section"><div className="rail-heading"><span><MessageCircle size={15} /> Room chat</span><span className="chat-live"><span className="pulse-dot" /> live</span></div><div className="chat-list">{snapshot.messages.length === 0 && <div className="chat-empty"><MessageCircle size={20} /><p>Nothing here yet.<br /><strong>Say the first thing.</strong></p></div>}{snapshot.messages.map(item => <div className="chat-item" key={item.id}><div className="chat-item-top"><strong>{item.displayName}</strong><time>{displayDate(item.createdAt)}</time></div><p>{item.message}</p></div>)}</div><form className="chat-form" onSubmit={event => { event.preventDefault(); void sendMessage(); }}><input value={message} onChange={event => setMessage(event.target.value)} placeholder="Say something…" maxLength={500} /><button type="submit" aria-label="Send message"><Send size={16} /></button></form></div></aside>
     </div>
     {notice && <div className="notice-toast"><CircleHelp size={16} /> {notice}<button onClick={() => setNotice("")}><X size={14} /></button></div>}

@@ -44,3 +44,6 @@ input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(192,132,25
 .member-remove:hover { color: var(--danger); border-color: rgba(255,125,125,.45); }
 .external-source-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; color: var(--purple); border: 1px solid rgba(192,132,255,.28); border-radius: 9px; background: var(--purple-soft); font-size: 11px; white-space: nowrap; }
 .external-source-link:hover { border-color: var(--purple); background: rgba(192,132,255,.2); }
+
+.wordmark-mark img { width: 21px; height: 21px; display: block; object-fit: contain; filter: drop-shadow(0 0 8px rgba(192,132,255,.42)); }
+.wordmark-mark { overflow: hidden; }

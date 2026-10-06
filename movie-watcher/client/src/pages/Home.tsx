@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, Check, ChevronDown, Clapperboard, Copy, Film, Link2, LockKeyhole, MessageCircle, Play, Radio, Sparkles, Users, X } from "lucide-react";
 import { useLocation } from "wouter";
 import { api, storeToken } from "@/lib/api";
+import { MovieWatcherLogo } from "@/components/MovieWatcherLogo";
 
 type RoomSnapshot = { code: string; members?: Array<{ id: string; displayName: string }> };
 type DialogMode = "create" | "join" | null;
@@ -46,7 +47,7 @@ export default function Home() {
   return (
     <main className="site-shell">
       <nav className="site-nav container-wide">
-        <a className="wordmark" href="/" aria-label="Movie Watcher home"><span className="wordmark-mark"><Film size={16} strokeWidth={2.5} /></span><span>movie watcher</span></a>
+        <a className="wordmark" href="/" aria-label="Movie Watcher home"><MovieWatcherLogo /></a>
         <div className="nav-links"><a href="#how-it-works">How it works</a><a href="#sources">Sources</a><a href="#faq">FAQ</a></div>
         <button className="nav-join" onClick={() => open("join")}>Join a room <ArrowRight size={16} /></button>
       </nav>
@@ -84,7 +85,7 @@ export default function Home() {
 
       <section className="faq-section container-wide" id="faq"><div className="section-intro"><div><div className="eyebrow">/ Good to know</div><h2>Questions before<br /><em>the opening scene?</em></h2></div><p>We keep the product small on purpose: a private room, a shared player, and the exact controls you need.</p></div><div className="faq-list"><details open><summary>Do guests need an account? <ChevronDown size={18} /></summary><p>No. A guest username is enough for a temporary room. Optional Manus login is kept architecture-ready for profiles and history later.</p></details><details><summary>What can I play? <ChevronDown size={18} /></summary><p>Officially embeddable providers—YouTube, Vimeo, Dailymotion, Wistia, Loom, Streamable, Internet Archive—and direct video files you are authorized to use. Unsupported or protected sources are never proxied or bypassed.</p></details><details><summary>How many people fit in one room? <ChevronDown size={18} /></summary><p>The default is three, including the host. The backend keeps capacity configurable for a future plan.</p></details></div></section>
 
-      <footer className="site-footer container-wide"><a className="wordmark" href="/"><span className="wordmark-mark"><Film size={16} strokeWidth={2.5} /></span><span>movie watcher</span></a><span>Watch together. Stay human.</span><span>© {new Date().getFullYear()} Movie Watcher</span></footer>
+      <footer className="site-footer container-wide"><a className="wordmark" href="/"><MovieWatcherLogo /></a><span>Watch together. Stay human.</span><span>© {new Date().getFullYear()} Movie Watcher</span></footer>
 
       {dialog && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="room-modal"><button className="modal-close" onClick={() => setDialog(null)} aria-label="Close"><X size={18} /></button><div className="eyebrow">/ {dialog === "create" ? "New screening" : "Room invite"}</div><h2>{dialog === "create" ? "Make a room for your people." : "Pick up where the room left off."}</h2><p>{dialog === "create" ? "You’ll get a private link in a second. No account, no feed, no fuss." : "Enter the short code from your invite and choose the name your friends will see."}</p><label>Your guest name<input autoFocus value={username} onChange={event => setUsername(event.target.value)} placeholder="e.g. Aisha" maxLength={32} /></label>{dialog === "join" && <label>Room code<input value={roomCode} onChange={event => setRoomCode(event.target.value.toUpperCase())} placeholder="AB7K92" maxLength={8} /></label>}{dialog === "create" && <label>Movie URL <span className="label-optional">optional</span><input value={movieUrl} onChange={event => setMovieUrl(event.target.value)} placeholder="Paste a Vimeo, Wistia, Loom, Dailymotion, or video URL" /></label>}<label>Room password <span className="label-optional">optional</span><input type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Only if you want one" maxLength={64} /></label>{error && <div className="form-error">{error}</div>}<button className="button button-primary modal-submit" disabled={busy} onClick={submit}>{busy ? "Opening…" : dialog === "create" ? "Open the room" : "Join the room"}<ArrowRight size={17} /></button><div className="modal-footnote"><LockKeyhole size={14} /> Temporary guest access · invite-only by default</div></div></div>}
     </main>

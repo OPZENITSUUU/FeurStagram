@@ -51,7 +51,8 @@ type InternalRoom = {
   messages: InternalMessage[];
 };
 
-type RoomEvent = { type: "snapshot" | "message" | "presence" | "ended"; snapshot?: RoomSnapshot; message?: ChatMessage };
+type AudioSignal = { kind: "offer" | "answer" | "candidate" | "leave"; description?: { type?: string; sdp?: string }; candidate?: { candidate?: string; sdpMid?: string | null; sdpMLineIndex?: number | null } };
+type RoomEvent = { type: "snapshot" | "message" | "presence" | "ended"; snapshot?: RoomSnapshot; message?: ChatMessage } | { type: "audio-signal"; fromMemberId: string; toMemberId: string; signal: AudioSignal };
 
 export type MemberView = Omit<InternalMember, "token" | "dbId"> & { online: boolean };
 export type ChatMessage = InternalMessage;
@@ -251,6 +252,21 @@ export async function updateMovie(code: string, token: string | undefined, rawUr
   if (db && room.dbId) await db.update(rooms).set({ movieTitle: movie.title, movieSource: movie.source, movieUrl: movie.originalUrl, posterUrl: movie.posterUrl, playerUrl: movie.playerUrl, durationSeconds: movie.durationSeconds, currentPosition: 0, isPlaying: 0, playbackUpdatedAt: new Date(room.playbackUpdatedAt) }).where(eq(rooms.id, room.dbId)).catch(() => undefined);
   emit(room.code, { type: "snapshot", snapshot: snapshot(room) });
   return snapshot(room);
+}
+
+export async function relayAudioSignal(code: string, token: string | undefined, input: { toMemberId?: unknown; signal?: unknown }) {
+  const room = await getRoom(code);
+  const member = memberFor(room, token);
+  const toMemberId = typeof input.toMemberId === "string" ? input.toMemberId : "";
+  const target = room.members.get(toMemberId);
+  if (!target || target.id === member.id) throw new RoomError(400, "That audio participant is not available.");
+  if (!input.signal || typeof input.signal !== "object") throw new RoomError(400, "Invalid audio signal.");
+  const signal = input.signal as Record<string, unknown>;
+  if (!["offer", "answer", "candidate", "leave"].includes(String(signal.kind))) throw new RoomError(400, "Invalid audio signal type.");
+  if (JSON.stringify(signal).length > 100_000) throw new RoomError(413, "Audio signal is too large.");
+  await touch(room, member);
+  emit(room.code, { type: "audio-signal", fromMemberId: member.id, toMemberId: target.id, signal: signal as AudioSignal });
+  return { success: true };
 }
 
 export async function addMessage(code: string, token: string | undefined, rawMessage: unknown) {

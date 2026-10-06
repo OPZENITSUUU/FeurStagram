@@ -47,3 +47,12 @@ input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(192,132,25
 
 .wordmark-mark img { width: 21px; height: 21px; display: block; object-fit: contain; filter: drop-shadow(0 0 8px rgba(192,132,255,.42)); }
 .wordmark-mark { overflow: hidden; }
+.voice-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--purple-soft); }
+.voice-controls strong, .voice-controls small { display: flex; align-items: center; gap: 6px; }
+.voice-controls strong { font: 600 12px 'Space Grotesk'; }
+.voice-controls strong svg { color: var(--purple); }
+.voice-controls small { color: var(--muted-2); font-size: 10px; margin-top: 3px; }
+.voice-toggle { display: grid; place-items: center; width: 34px; height: 34px; flex: none; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); cursor: pointer; }
+.voice-toggle:hover, .voice-toggle.active { color: #160e20; border-color: var(--purple); background: var(--purple); }
+.voice-toggle.speaking { box-shadow: 0 0 0 4px rgba(192,132,255,.18), 0 0 18px rgba(192,132,255,.4); }
+.voice-status { color: var(--muted-2); font-size: 10px; margin: 8px 1px 0; }

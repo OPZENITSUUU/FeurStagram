@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, ChevronDown, CircleHelp, Copy, ExternalLink, Film, Link2, Lock, LogOut, MessageCircle, MoreHorizontal, Pause, Play, Radio, Send, Settings, Shield, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Users, Volume2, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, CircleHelp, Copy, ExternalLink, Film, Link2, Lock, LogOut, MessageCircle, Mic, MicOff, MoreHorizontal, Pause, Play, Radio, Send, Settings, Shield, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Users, Volume2, X } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { api, getStoredToken, storeToken } from "@/lib/api";
 import { MovieWatcherLogo } from "@/components/MovieWatcherLogo";
@@ -10,6 +10,7 @@ type ChatMessage = { id: string; memberId: string; displayName: string; message:
 type Snapshot = { code: string; roomId: string; createdAt: string; expiresAt: string; currentPosition: number; isPlaying: boolean; playbackUpdatedAt: string; hostControlsOnly: boolean; isLocked: boolean; maxMembers: number; movie: Movie | null; members: Member[]; messages: ChatMessage[] };
 
 type Props = { params: { roomCode: string } };
+type AudioSignal = { kind: "offer" | "answer" | "candidate" | "leave"; description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
 
 function formatTime(value: number) { const seconds = Math.max(0, Math.floor(value)); return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`; }
 function displayDate(value: number) { return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(value); }
@@ -33,9 +34,100 @@ export default function WatchRoom({ params }: Props) {
   const [showSettings, setShowSettings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [voicePeers, setVoicePeers] = useState<string[]>([]);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const peerConnectionsRef = useRef(new Map<string, RTCPeerConnection>());
+  const audioElementsRef = useRef(new Map<string, HTMLAudioElement>());
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserFrameRef = useRef<number | null>(null);
 
   const me = useMemo(() => snapshot?.members.find(member => member.id === localStorage.getItem(`movie-watcher:member-id:${code}`)) ?? snapshot?.members.find(member => member.isHost && token === localStorage.getItem(`movie-watcher:host:${code}`)), [snapshot, code, token]);
   const canControl = Boolean(me?.isHost || !snapshot?.hostControlsOnly);
+
+  async function sendAudioSignal(toMemberId: string, signal: AudioSignal) {
+    if (!token) return;
+    await api(`/api/rooms/${code}/audio-signal`, { method: "POST", token, body: JSON.stringify({ toMemberId, signal }) }).catch(() => undefined);
+  }
+
+  function closeAudioPeer(memberId: string) {
+    peerConnectionsRef.current.get(memberId)?.close();
+    peerConnectionsRef.current.delete(memberId);
+    const audio = audioElementsRef.current.get(memberId);
+    audio?.pause();
+    audio?.remove();
+    audioElementsRef.current.delete(memberId);
+    setVoicePeers(current => current.filter(id => id !== memberId));
+  }
+
+  function createAudioPeer(memberId: string, initiator: boolean) {
+    const existing = peerConnectionsRef.current.get(memberId);
+    if (existing) {
+      if (initiator && localStreamRef.current && existing.getSenders().length === 0) {
+        localStreamRef.current.getTracks().forEach(track => existing.addTrack(track, localStreamRef.current!));
+        void existing.createOffer().then(offer => existing.setLocalDescription(offer).then(() => sendAudioSignal(memberId, { kind: "offer", description: offer }))).catch(() => undefined);
+      }
+      return existing;
+    }
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    peerConnectionsRef.current.set(memberId, pc);
+    localStreamRef.current?.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current!));
+    pc.onicecandidate = event => { if (event.candidate) void sendAudioSignal(memberId, { kind: "candidate", candidate: event.candidate.toJSON() }); };
+    pc.ontrack = event => {
+      const stream = event.streams[0];
+      if (!stream) return;
+      let audio = audioElementsRef.current.get(memberId);
+      if (!audio) { audio = document.createElement("audio"); audio.autoplay = true; audio.setAttribute("aria-label", "Room voice audio"); audioElementsRef.current.set(memberId, audio); document.body.appendChild(audio); }
+      audio.srcObject = stream;
+      void audio.play().catch(() => undefined);
+      setVoicePeers(current => current.includes(memberId) ? current : [...current, memberId]);
+    };
+    pc.onconnectionstatechange = () => { if (["failed", "closed"].includes(pc.connectionState)) closeAudioPeer(memberId); };
+    if (initiator) void pc.createOffer().then(offer => pc.setLocalDescription(offer).then(() => sendAudioSignal(memberId, { kind: "offer", description: offer }))).catch(() => closeAudioPeer(memberId));
+    return pc;
+  }
+
+  async function handleAudioSignal(fromMemberId: string, signal: AudioSignal) {
+    if (signal.kind === "leave") { closeAudioPeer(fromMemberId); return; }
+    const pc = createAudioPeer(fromMemberId, false);
+    if (signal.kind === "offer" && signal.description) {
+      await pc.setRemoteDescription(signal.description);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await sendAudioSignal(fromMemberId, { kind: "answer", description: answer });
+    } else if (signal.kind === "answer" && signal.description) {
+      await pc.setRemoteDescription(signal.description);
+    } else if (signal.kind === "candidate" && signal.candidate) {
+      await pc.addIceCandidate(signal.candidate).catch(() => undefined);
+    }
+  }
+
+  async function toggleAudio() {
+    if (audioEnabled) {
+      for (const memberId of peerConnectionsRef.current.keys()) { void sendAudioSignal(memberId, { kind: "leave" }); closeAudioPeer(memberId); }
+      localStreamRef.current?.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+      if (analyserFrameRef.current) cancelAnimationFrame(analyserFrameRef.current);
+      audioContextRef.current?.close().catch(() => undefined);
+      audioContextRef.current = null;
+      setIsSpeaking(false); setAudioEnabled(false);
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) { setNotice("Voice chat is not supported in this browser."); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      localStreamRef.current = stream; setAudioEnabled(true);
+      const AudioContextConstructor = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AudioContextConstructor) {
+        const context = new AudioContextConstructor(); const analyser = context.createAnalyser(); analyser.fftSize = 256; context.createMediaStreamSource(stream).connect(analyser);
+        audioContextRef.current = context; const data = new Uint8Array(analyser.frequencyBinCount);
+        const watchLevel = () => { analyser.getByteFrequencyData(data); const average = data.reduce((sum, value) => sum + value, 0) / data.length; setIsSpeaking(average > 18); analyserFrameRef.current = requestAnimationFrame(watchLevel); };
+        watchLevel();
+      }
+      snapshot?.members.filter(member => member.id !== me?.id).forEach(member => createAudioPeer(member.id, true));
+    } catch { setNotice("Microphone permission is required for voice chat."); }
+  }
 
   function syncEmbed(action: "play" | "pause" | "seek", position = snapshot?.currentPosition ?? 0) {
     const currentMovie = snapshot?.movie;
@@ -63,10 +155,25 @@ export default function WatchRoom({ params }: Props) {
     eventSourceRef.current = stream;
     stream.addEventListener("snapshot", event => { try { setSnapshot(JSON.parse((event as MessageEvent).data)); } catch { /* ignore malformed event */ } });
     stream.addEventListener("message", event => { try { const payload = JSON.parse((event as MessageEvent).data); if (payload.snapshot) setSnapshot(payload.snapshot); } catch { /* ignore malformed event */ } });
+    stream.addEventListener("audio-signal", event => { try { const payload = JSON.parse((event as MessageEvent).data) as { fromMemberId: string; toMemberId: string; signal: AudioSignal }; if (payload.toMemberId === me?.id) void handleAudioSignal(payload.fromMemberId, payload.signal); } catch { /* ignore malformed audio signal */ } });
     stream.addEventListener("ended", () => { setRoomError("The host ended this room."); setSnapshot(null); });
     stream.onerror = () => { /* EventSource retries automatically; tRPC polling is the fallback for reads. */ };
     return () => { stream.close(); eventSourceRef.current = null; };
-  }, [code, token, Boolean(snapshot)]);
+  }, [code, token, Boolean(snapshot), me?.id]);
+
+  useEffect(() => {
+    if (!audioEnabled || !snapshot || !me) return;
+    const memberIds = new Set(snapshot.members.filter(member => member.id !== me.id).map(member => member.id));
+    for (const memberId of memberIds) if (!peerConnectionsRef.current.has(memberId)) createAudioPeer(memberId, true);
+    for (const memberId of peerConnectionsRef.current.keys()) if (!memberIds.has(memberId)) closeAudioPeer(memberId);
+  }, [audioEnabled, snapshot?.members.length, me?.id]);
+
+  useEffect(() => () => {
+    for (const memberId of peerConnectionsRef.current.keys()) closeAudioPeer(memberId);
+    localStreamRef.current?.getTracks().forEach(track => track.stop());
+    if (analyserFrameRef.current) cancelAnimationFrame(analyserFrameRef.current);
+    audioContextRef.current?.close().catch(() => undefined);
+  }, [code]);
 
   useEffect(() => {
     if (!token || !snapshot) return;
@@ -119,7 +226,7 @@ export default function WatchRoom({ params }: Props) {
     <header className="room-header"><div className="room-header-left"><Link className="room-back" href="/"><ArrowLeft size={17} /></Link><a className="wordmark" href="/"><MovieWatcherLogo /></a><span className="header-divider" /><span className="room-label">Room <strong>{code}</strong></span></div><div className="room-header-right"><span className="secure-pill"><span className="live-dot" /> {snapshot.members.length}/{snapshot.maxMembers} in room</span><button className="icon-button" onClick={copyInvite} title="Copy invite link">{copied ? <Check size={17} /> : <Copy size={17} />}</button><button className="icon-button" onClick={() => setShowSettings(true)} title="Room settings"><Settings size={17} /></button></div></header>
     <div className="room-layout">
       <section className="player-column"><div className={`player-frame ${movie ? "has-movie" : "empty-player"}`}>{movie && isDirect && <video ref={videoRef} src={movie.playerUrl ?? undefined} poster={movie.posterUrl ?? undefined} playsInline controls={false} onPlay={() => !applyingRemote.current && void playback("play")} onPause={() => !applyingRemote.current && void playback("pause")} onSeeked={() => !applyingRemote.current && void playback("seek")} onClick={() => canControl && void playback(videoRef.current?.paused ? "play" : "pause")} />}{movie && !isDirect && movie.playerUrl && <iframe ref={iframeRef} title={movie.title} src={movie.source === "youtube" ? `${movie.playerUrl}&origin=${encodeURIComponent(window.location.origin)}` : movie.playerUrl} referrerPolicy="strict-origin-when-cross-origin" onLoad={() => syncEmbed(snapshot.isPlaying ? "play" : "pause", snapshot.currentPosition)} allow="autoplay; fullscreen; picture-in-picture; web-share" allowFullScreen sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-same-origin allow-scripts" />}{!movie && <div className="empty-player-content"><div className="empty-reel"><Film size={25} /></div><div className="eyebrow">/ The screen is yours</div><h2>What are we watching?</h2><p>Add an official embed or an authorized video file to start the room.</p><button className="button button-primary" onClick={() => setShowSettings(true)}>Add a movie <ArrowRightIcon /></button></div>}{movie && <div className="player-overlay"><span className="sync-badge"><span className="pulse-dot" /> {snapshot.isPlaying ? "Playing in sync" : "Paused for everyone"}</span>{!canControl && <span className="host-note"><Lock size={13} /> Host controls playback</span>}</div>}</div><div className="player-meta"><div><div className="eyebrow">/ Now screening · {movie?.sourceLabel ?? "Waiting for a source"}</div><h1>{movie?.title ?? "Choose a movie for the room"}</h1><p>{movie ? "The room is ready. Send the invite, then press play when everyone is in." : "Your room exists. Add a supported source from room settings to make it a screening."}</p></div><div className="player-meta-actions">{movie?.source === "youtube" && <a className="external-source-link" href={movie.originalUrl} target="_blank" rel="noreferrer">Open on YouTube <ExternalLink size={13} /></a>}{movie && <><button className="round-control" disabled={!canControl} onClick={() => void playback("seek", Math.max(0, (videoRef.current?.currentTime ?? snapshot.currentPosition) - 10))}><SkipBack size={16} /></button><button className="play-control" disabled={!canControl} onClick={togglePlayback}>{snapshot.isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}</button><button className="round-control" disabled={!canControl} onClick={() => void playback("seek", (videoRef.current?.currentTime ?? snapshot.currentPosition) + 10)}><SkipForward size={16} /></button></>}</div></div></section>
-      <aside className="social-rail"><div className="rail-section members-section"><div className="rail-heading"><span><Users size={15} /> People here</span><span className="count-badge">{snapshot.members.length}</span></div><div className="member-list">{snapshot.members.map(member => <div className="member-row" key={member.id}><span className="avatar" style={{ background: member.avatarColor }}>{member.displayName.slice(0, 1).toUpperCase()}</span><span className="member-name"><strong>{member.displayName}{member.isHost && <span className="host-badge">HOST</span>}</strong><small><span className={`status-dot ${member.online ? "online" : "offline"}`} /> {member.online ? "Online now" : "Away"}</small></span>{member.isHost ? <Sparkles size={13} className="host-spark" /> : me?.isHost ? <button className="member-remove" onClick={() => void removeMember(member.id, member.displayName)} aria-label={`Remove ${member.displayName}`}><X size={13} /></button> : <MoreHorizontal size={16} className="member-menu" />}</div>)}</div></div><div className="rail-section chat-section"><div className="rail-heading"><span><MessageCircle size={15} /> Room chat</span><span className="chat-live"><span className="pulse-dot" /> live</span></div><div className="chat-list">{snapshot.messages.length === 0 && <div className="chat-empty"><MessageCircle size={20} /><p>Nothing here yet.<br /><strong>Say the first thing.</strong></p></div>}{snapshot.messages.map(item => <div className="chat-item" key={item.id}><div className="chat-item-top"><strong>{item.displayName}</strong><time>{displayDate(item.createdAt)}</time></div><p>{item.message}</p></div>)}</div><form className="chat-form" onSubmit={event => { event.preventDefault(); void sendMessage(); }}><input value={message} onChange={event => setMessage(event.target.value)} placeholder="Say something…" maxLength={500} /><button type="submit" aria-label="Send message"><Send size={16} /></button></form></div></aside>
+      <aside className="social-rail"><div className="rail-section members-section"><div className="rail-heading"><span><Users size={15} /> People here</span><span className="count-badge">{snapshot.members.length}</span></div><div className="voice-controls"><div><strong><Volume2 size={14} /> Voice chat</strong><small>{audioEnabled ? (isSpeaking ? "You are speaking" : "Mic is live") : "Talk while you watch"}</small></div><button className={`voice-toggle ${audioEnabled ? "active" : ""} ${isSpeaking ? "speaking" : ""}`} onClick={() => void toggleAudio()} aria-label={audioEnabled ? "Turn microphone off" : "Turn microphone on"}>{audioEnabled ? <Mic size={16} /> : <MicOff size={16} />}</button></div><div className="voice-status">{audioEnabled ? `${voicePeers.length} other microphone${voicePeers.length === 1 ? "" : "s"} connected` : "Microphone off"}</div><div className="member-list">{snapshot.members.map(member => <div className="member-row" key={member.id}><span className="avatar" style={{ background: member.avatarColor }}>{member.displayName.slice(0, 1).toUpperCase()}</span><span className="member-name"><strong>{member.displayName}{member.isHost && <span className="host-badge">HOST</span>}</strong><small><span className={`status-dot ${member.online ? "online" : "offline"}`} /> {member.online ? "Online now" : "Away"}</small></span>{member.isHost ? <Sparkles size={13} className="host-spark" /> : me?.isHost ? <button className="member-remove" onClick={() => void removeMember(member.id, member.displayName)} aria-label={`Remove ${member.displayName}`}><X size={13} /></button> : <MoreHorizontal size={16} className="member-menu" />}</div>)}</div></div><div className="rail-section chat-section"><div className="rail-heading"><span><MessageCircle size={15} /> Room chat</span><span className="chat-live"><span className="pulse-dot" /> live</span></div><div className="chat-list">{snapshot.messages.length === 0 && <div className="chat-empty"><MessageCircle size={20} /><p>Nothing here yet.<br /><strong>Say the first thing.</strong></p></div>}{snapshot.messages.map(item => <div className="chat-item" key={item.id}><div className="chat-item-top"><strong>{item.displayName}</strong><time>{displayDate(item.createdAt)}</time></div><p>{item.message}</p></div>)}</div><form className="chat-form" onSubmit={event => { event.preventDefault(); void sendMessage(); }}><input value={message} onChange={event => setMessage(event.target.value)} placeholder="Say something…" maxLength={500} /><button type="submit" aria-label="Send message"><Send size={16} /></button></form></div></aside>
     </div>
     {notice && <div className="notice-toast"><CircleHelp size={16} /> {notice}<button onClick={() => setNotice("")}><X size={14} /></button></div>}
     {showSettings && <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="settings-modal"><button className="modal-close" onClick={() => setShowSettings(false)}><X size={18} /></button><div className="eyebrow">/ Room settings</div><h2>Keep the room<br /><em>in your hands.</em></h2><p>Change the source or tune the room without leaving the screening.</p><label>Movie or video URL<input value={movieUrl} onChange={event => setMovieUrl(event.target.value)} placeholder="Paste an official embed or authorized video URL" /></label><button className="button button-primary full-button" disabled={busy || !movieUrl.trim()} onClick={() => void addMovie()}>Add supported source <Link2 size={16} /></button><div className="settings-divider" /><div className="setting-row"><div><strong>Host controls only</strong><small>Only you can play, pause, or seek.</small></div><button className={`toggle ${snapshot.hostControlsOnly ? "active" : ""}`} onClick={() => void setting({ hostControlsOnly: !snapshot.hostControlsOnly })}><span /></button></div><div className="setting-row"><div><strong>Lock the room</strong><small>Stop new people from joining.</small></div><button className={`toggle ${snapshot.isLocked ? "active" : ""}`} onClick={() => void setting({ isLocked: !snapshot.isLocked })}><span /></button></div><div className="settings-divider" /><button className="danger-link" onClick={() => void endRoom()}><LogOut size={15} /> End room for everyone</button><div className="modal-footnote"><Shield size={14} /> Supported sources only · no DRM or paywall bypasses</div></div></div>}
